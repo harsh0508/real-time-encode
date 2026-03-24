@@ -1,0 +1,3 @@
+D:/real-time-encode/build/CMakeFiles/videoEngine.dir
+D:/real-time-encode/build/CMakeFiles/edit_cache.dir
+D:/real-time-encode/build/CMakeFiles/rebuild_cache.dir

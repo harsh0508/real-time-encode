@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "outDir": "dist",
+    "target": "ES2020",
+    "module": "nodenext",
+   "moduleResolution": "nodenext"
+  },
+  "include": ["renderer/**/*.ts"]
+}
