@@ -1,18 +1,41 @@
+// below is for windows :
+
+// {
+//   "configurations": [
+//     {
+//       "name": "Win32",
+//       "includePath": [
+//         "${workspaceFolder}/**",
+//         "D:/vcpkg/installed/x64-windows/include",
+//         "D:/vcpkg/installed/x64-windows/include/opencv4"
+//       ],
+//       "defines": [],
+//       "compilerPath": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.*/bin/Hostx64/x64/cl.exe",
+//       "cStandard": "c17",
+//       "cppStandard": "c++20",
+//       "intelliSenseMode": "windows-msvc-x64"
+//     }
+//   ],
+//   "version": 4
+// }
+
 {
+  "version": 4,
   "configurations": [
     {
-      "name": "Win32",
+      "name": "Mac",
       "includePath": [
         "${workspaceFolder}/**",
-        "D:/vcpkg/installed/x64-windows/include",
-        "D:/vcpkg/installed/x64-windows/include/opencv4"
+        "${env:HOME}/vcpkg/installed/arm64-osx/include",
+        "${env:HOME}/vcpkg/installed/arm64-osx/include/opencv4",
+        "${env:HOME}/vcpkg/installed/x64-osx/include",
+        "${env:HOME}/vcpkg/installed/x64-osx/include/opencv4"
       ],
       "defines": [],
-      "compilerPath": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.*/bin/Hostx64/x64/cl.exe",
+      "compilerPath": "/usr/bin/clang++",
       "cStandard": "c17",
-      "cppStandard": "c++20",
-      "intelliSenseMode": "windows-msvc-x64"
+      "cppStandard": "c++17",
+      "intelliSenseMode": "macos-clang-arm64"
     }
-  ],
-  "version": 4
+  ]
 }

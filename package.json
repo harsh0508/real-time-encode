@@ -15,11 +15,9 @@
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",
     "electron": "^40.8.0",
-    "node-gyp": "^12.2.0",
     "typescript": "^5.9.3",
     "undici-types": "^7.22.0"
   },
   "dependencies": {
-    "mmap-io": "^1.1.7"
   }
 }
