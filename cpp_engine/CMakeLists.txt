@@ -53,4 +53,6 @@ target_link_libraries(cpp_engine PRIVATE
 
     re2
     cpuinfo
+    
+    PRIVATE avcodec avformat avutil
 )

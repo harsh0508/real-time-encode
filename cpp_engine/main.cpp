@@ -1,6 +1,7 @@
 #include <opencv2/opencv.hpp>
 #include <onnxruntime/core/session/onnxruntime_cxx_api.h>
 #include <iostream>
+#include "encoder.h"
 
 const float THRESHOLD = 0.7;
 
@@ -44,6 +45,7 @@ float runCNN(cv::Mat &img, Ort::Session &session)
 
 int main()
 {
+    std::cout << "started" << std::flush;
     cv::VideoCapture cam(0);
 
     if(!cam.isOpened())
