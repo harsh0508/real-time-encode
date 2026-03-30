@@ -1,16 +1,3 @@
-# cmake_minimum_required(VERSION 3.10)
-
-# project(videoEngine)
-
-# set(CMAKE_CXX_STANDARD 17)
-
-# find_package(OpenCV REQUIRED)
-
-# add_executable(videoEngine main.cpp)
-
-# target_link_libraries(videoEngine ${OpenCV_LIBS})
-
-
 cmake_minimum_required(VERSION 3.16)
 project(cpp_engine)
 
@@ -23,11 +10,15 @@ set(VCPKG_ROOT "$ENV{HOME}/vcpkg")
 set(VCPKG_TRIPLET "arm64-osx")
 set(VCPKG_INSTALLED "${VCPKG_ROOT}/installed/${VCPKG_TRIPLET}")
 
-add_executable(cpp_engine main.cpp)
+add_executable(cpp_engine
+    main.cpp
+    encoder/encoder.cpp
+)
 
 target_include_directories(cpp_engine PRIVATE
     ${OpenCV_INCLUDE_DIRS}
     ${VCPKG_INSTALLED}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/encoder
 )
 
 target_link_directories(cpp_engine PRIVATE
@@ -37,7 +28,6 @@ target_link_directories(cpp_engine PRIVATE
 
 target_link_libraries(cpp_engine PRIVATE
     ${OpenCV_LIBS}
-
     onnxruntime_session
     onnxruntime_framework
     onnxruntime_graph
@@ -50,9 +40,17 @@ target_link_libraries(cpp_engine PRIVATE
     onnxruntime_lora
     onnx
     onnx_proto
-
     re2
     cpuinfo
-    
-    PRIVATE avcodec avformat avutil
+    avcodec
+    avformat
+    avutil
+    swscale
+    swresample
+
+    "-framework VideoToolbox"
+    "-framework AudioToolbox"
+    "-framework CoreMedia"
+    "-framework CoreVideo"
+    "-framework CoreFoundation"
 )

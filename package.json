@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "electron .",
-    "build:cpp": "cmake -S cpp_engine -B build && cmake --build build",
+    "build:cpp": "cmake -S cpp_engine -B build -DCMAKE_TOOLCHAIN_FILE=$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=arm64-osx && cmake --build build",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

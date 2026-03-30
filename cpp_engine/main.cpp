@@ -45,17 +45,25 @@ float runCNN(cv::Mat &img, Ort::Session &session)
 
 int main()
 {
-    std::cout << "started" << std::flush;
+    // std::cout << "started" << std::flush;
     cv::VideoCapture cam(0);
 
     if(!cam.isOpened())
         return -1;
 
-    Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "cnn");
-    Ort::SessionOptions opts;
-    opts.SetIntraOpNumThreads(4);
+    // Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "cnn");
+    // Ort::SessionOptions opts;
+    // opts.SetIntraOpNumThreads(4);
 
-    Ort::Session session(env, "mobilenet.onnx", opts);
+    // Ort::Session session(env, "mobilenet.onnx", opts);
+
+    const int width {static_cast<int>(cam.get(cv::CAP_PROP_FRAME_WIDTH))} ;
+    const int height {static_cast<int>(cam.get(cv::CAP_PROP_FRAME_HEIGHT))};
+    int fps {static_cast<int>(cam.get(cv::CAP_PROP_FPS))};
+
+    fps = (fps <=0) ? 25: fps;
+    
+    VideoEncoder myEncoder("output.h264" , width , height , fps);
 
     cv::Mat frame;
 
@@ -68,19 +76,25 @@ int main()
         cv::Mat infer;
         cv::resize(frame, infer, cv::Size(426,240));
 
-        float prob = runCNN(infer, session);
+        // float prob = runCNN(infer, session);
 
-        if(prob > THRESHOLD)
-            frame.setTo(cv::Scalar(0,0,0));
+        // if(prob > THRESHOLD)
+        //     frame.setTo(cv::Scalar(0,0,0));
 
         // ENCODER SHOULD RUN HERE
         // encodeFrame(frame);
+
+        myEncoder.encodeFrame(frame);
 
         cv::imshow("stream", frame);
 
         if(cv::waitKey(1)==27)
             break;
     }
+    myEncoder.flush();
+
+    cam.release();
+    cv::destroyAllWindows();
 
     return 0;
 }
