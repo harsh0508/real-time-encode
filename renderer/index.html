@@ -1,10 +1,129 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Camera Preview</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: Arial, Helvetica, sans-serif;
+        background: #0f172a;
+        color: #f8fafc;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+
+      .app {
+        width: 100%;
+        max-width: 1000px;
+        background: #1e293b;
+        border-radius: 20px;
+        padding: 24px;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+      }
+
+      .header {
+        margin-bottom: 20px;
+      }
+
+      .title {
+        font-size: 28px;
+        font-weight: 700;
+        margin-bottom: 8px;
+      }
+
+      .subtitle {
+        font-size: 15px;
+        color: #cbd5e1;
+      }
+
+      .video-wrap {
+        width: 100%;
+        background: #020617;
+        border-radius: 16px;
+        overflow: hidden;
+        border: 1px solid #334155;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 500px;
+      }
+
+      video {
+        width: 100%;
+        height: auto;
+        display: block;
+        background: black;
+      }
+
+      .controls {
+        margin-top: 20px;
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      button {
+        border: none;
+        outline: none;
+        padding: 12px 20px;
+        border-radius: 12px;
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 0.15s ease, opacity 0.15s ease;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+        opacity: 0.95;
+      }
+
+      #startBtn {
+        background: #22c55e;
+        color: white;
+      }
+
+      #stopBtn {
+        background: #ef4444;
+        color: white;
+      }
+
+      .status {
+        margin-top: 16px;
+        font-size: 14px;
+        color: #94a3b8;
+      }
+    </style>
+  </head>
   <body>
-    <h2>C++ Video Engine Control</h2>
+    <div class="app">
+      <div class="header">
+        <div class="title">Live Camera Preview</div>
+        <div class="subtitle">Electron webcam stream running locally</div>
+      </div>
 
-    <video id="video" autoplay playsinline muted width="400"></video>
+      <div class="video-wrap">
+        <video id="video" autoplay playsinline muted></video>
+      </div>
 
-    <script src="./renderer.js"></script>
+      <div class="controls">
+        <button id="startBtn">Start Camera</button>
+        <button id="stopBtn">Stop Camera</button>
+      </div>
+
+      <div class="status" id="status">Status: Waiting to start camera</div>
+    </div>
+
+    <script type="module" src="./renderer.js"></script>
   </body>
 </html>
