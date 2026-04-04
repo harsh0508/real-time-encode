@@ -28,7 +28,7 @@ function createWindow() {
   })
 
   // If using normal HTML file
-  win.loadFile(path.join(__dirname, "../renderer/index.html"))
+  win.loadFile(path.join(__dirname, "../real-time-encode/renderer/index.html"))
 
   // If using Vite dev server, use this instead:
   // win.loadURL("http://localhost:5173")

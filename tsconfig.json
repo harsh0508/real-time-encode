@@ -5,5 +5,5 @@
     "module": "nodenext",
    "moduleResolution": "nodenext"
   },
-  "include": ["renderer/**/*.ts"]
+  "include": ["renderer/**/*.ts", "renderer/renderer.js"]
 }
