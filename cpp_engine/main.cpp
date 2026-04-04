@@ -3,14 +3,41 @@
 #include <iostream>
 #include "encoder.h"
 #include <chrono>
+#include <cmath>
 
 constexpr float THRESHOLD {0.7};
+
+
+cv::Mat myResize(cv::Mat &frame , int outW , int outH){
+    // implemment my own resize to make it faster
+
+    cv::Mat out(outW , outH , frame.type());
+    // empty cv Mat
+
+    if(frame.cols - 1 < outW || frame.rows - 1 < outH || outH <= 0 || outW <= 0){
+        return out;
+    }
+
+    float xScale = static_cast<float>(frame.cols) / outW;
+    float yScale = static_cast<float>(frame.rows) / outH;
+
+    // frame.at<cv::Vec3b>(cordinatey , cordinatex ) ---> gives array of 3 which can be rgb [r,g,b]
+ 
+    for(int x { 0 }; x < frame.rows ; x++){
+        std::cout<< frame.at<cv::Vec3b>(0,x);
+    }
+    std::cout<< '\n';
+
+    return out;
+
+
+}
 
 float runCNN(cv::Mat &img, Ort::Session &session , 
     const char** inputNames , const char** outputNames ,
     Ort::MemoryInfo &mem)
 {
-    constexpr int cnnHeight { 240};
+    constexpr int cnnHeight {240};
     constexpr int cnnWidth {320};
     constexpr int channels {3};
     constexpr int batch  {1};
@@ -69,7 +96,7 @@ int main()
 
     Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "cnn");
     Ort::SessionOptions opts;
-    opts.SetIntraOpNumThreads(4);
+    opts.SetIntraOpNumThreads(4); // was 4 before **
 
     Ort::Session session(env, "./onnx_model/face-det.onnx", opts);
 
@@ -92,17 +119,24 @@ int main()
 
     cv::Mat frame;
     float prob {0.0f};
-    cv::Mat infer;
+    
+
+    // cv::Mat infer;
     // need to clear after every loop
     while(true)
     {
         cam >> frame;
         if(frame.empty()) break;
-
-        cv::resize(frame, infer, cv::Size(426,240));
-        
+        // cv::resize(frame, infer, cv::Size(320,240)); // 17ms was 426 before ** 
+        myResize(frame , 320, 240);
+        break;
         if(cnnFlag >=12){
-            prob = runCNN(infer, session , inputNames , outputNames , mem); // 15ms if imshow removed 
+            // auto start = std::chrono::steady_clock::now();
+            prob = runCNN(frame, session , inputNames , outputNames , mem); // 15ms if imshow removed -- 4-6ms resize is given before -- 23ms if no resize done
+            // auto end = std::chrono::steady_clock::now();
+            // auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            // std::cout << "Time taken: " << duration.count() << " milliseconds" << std::endl;
+            // break;
             cnnFlag = 0;
         }
         else{
@@ -110,12 +144,15 @@ int main()
         }
         
         if(prob > 0.9){
-            frame.setTo(cv::Scalar(0,0,0));
+            frame.setTo(cv::Scalar(0,0,0)); // 156 microseconds
         }
-            
-        // ENCODER SHOULD RUN HERE
+        // auto start = std::chrono::steady_clock::now();
         myEncoder.encodeFrame(frame); // 3ms
-        // cv::imshow("stream", frame);
+        // auto end = std::chrono::steady_clock::now();
+        // auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        // std::cout << "Time taken: " << duration.count() << " milliseconds" << std::endl;
+        // break;
+        // cv::imshow("stream", frame); ** remove to watch without renderer
 
         if(cv::waitKey(1)==27)
             break;

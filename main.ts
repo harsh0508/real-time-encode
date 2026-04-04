@@ -7,6 +7,7 @@ const __dirname = path.dirname(__filename)
 
 let win: BrowserWindow | null = null
 
+//  buttons -> turn on c++ engine and turn off c++
 function createWindow() {
   win = new BrowserWindow({
     width: 1200,
