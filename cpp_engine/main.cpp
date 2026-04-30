@@ -1,36 +1,104 @@
 #include <opencv2/opencv.hpp>
 #include <onnxruntime/core/session/onnxruntime_cxx_api.h>
 #include <iostream>
-#include "encoder.h"
 #include <chrono>
-#include <cmath>
+#include <queue>
+#include <mutex>
+#include <thread>
+#include <condition_variable>
+#include <atomic>
+#include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
+
+#include "httplib.h"
+
+#include "encoder.h"
 
 constexpr float THRESHOLD {0.7};
 
 
-cv::Mat myResize(cv::Mat &frame , int outW , int outH){
-    // implemment my own resize to make it faster
 
-    cv::Mat out(outW , outH , frame.type());
-    // empty cv Mat
+void httpServerThread(){
+    constexpr int port {8080};
+    httplib::Server server;
 
-    if(frame.cols - 1 < outW || frame.rows - 1 < outH || outH <= 0 || outW <= 0){
-        return out;
+    server.Get("/streams", [](const httplib::Request&, httplib::Response& res) {
+        res.set_content(R"({
+            "240p": "rtmp://localhost/live/stream_240",
+            "480p": "rtmp://localhost/live/stream_480",
+            "720p": "rtmp://localhost/live/stream_720"
+        })", "application/json");
+    });
+
+    server.listen("0.0.0.0", port);
+}
+
+struct FrameQueue{
+
+    std::queue<cv::Mat> q;
+    std::mutex m;
+    std::condition_variable cv;
+    std::atomic<bool> running{true};
+    size_t maxSize = 5;
+
+    void Pushframe(cv::Mat& frame){
+        std::lock_guard<std::mutex> lock(m);
+        // what does this mean ?
+
+        if(q.size() >= maxSize){
+            q.pop();
+        }
+
+        q.push(frame.clone());
+        cv.notify_one();
+
     }
 
-    float xScale = static_cast<float>(frame.cols) / outW;
-    float yScale = static_cast<float>(frame.rows) / outH;
+    bool popFrame(cv::Mat& frame){
+        std::unique_lock<std::mutex> lock(m);
 
-    // frame.at<cv::Vec3b>(cordinatey , cordinatex ) ---> gives array of 3 which can be rgb [r,g,b]
- 
-    for(int x { 0 }; x < frame.rows ; x++){
-        std::cout<< frame.at<cv::Vec3b>(0,x);
+        cv.wait(lock,[&]{
+            return !q.empty() || !running;
+        });
+
+        if(!running && q.empty()) return false;
+
+        frame = std::move(q.front());
+        q.pop();
+        return true;
     }
-    std::cout<< '\n';
 
-    return out;
+    void stopQueue(){
+        running = false;
+        cv.notify_all();
+    }
+
+};
 
 
+void EncoderWorker(
+    FrameQueue& queue,
+    const std::string& outFileName,
+    int outW,
+    int outH,
+    int fps,
+    int bitrate
+){
+    VideoEncoder encoder(outFileName, outW , outH , fps ,bitrate);
+    encoder.onPacket = [&](uint8_t* data, int size) {
+            // send via websocket / rtmp
+            // sendToRTMP(data, size);
+    };
+    cv::Mat frame;
+    cv::Mat resize;
+
+    while(queue.popFrame(frame)){
+        cv::resize(frame, resize, cv::Size(outW, outH));
+        encoder.encodeFrame(resize);
+        
+
+    }
+    encoder.flush();
 }
 
 float runCNN(cv::Mat &img, Ort::Session &session , 
@@ -115,11 +183,48 @@ int main()
 
     fps = (fps <=0) ? 25: fps;
     
-    VideoEncoder myEncoder("output.h264" , width , height , fps);
+    // VideoEncoder myEncoder("output.h264" , width , height , fps);  
+
+    FrameQueue q240;
+    FrameQueue q480;
+    FrameQueue q720;
+
+    std::thread t240(
+        EncoderWorker,
+        std::ref(q240),
+        "output_240p.h264",
+        426,
+        240,
+        fps,
+        300000
+    );
+
+    std::thread t480(
+        EncoderWorker,
+        std::ref(q480),
+        "output_480p.h264",
+        854,
+        480,
+        fps,
+        800000
+    );
+
+    std::thread t720(
+        EncoderWorker,
+        std::ref(q720),
+        "output_720p.h264",
+        1280,
+        720,
+        fps,
+        2500000
+    );
+
 
     cv::Mat frame;
     float prob {0.0f};
     
+    std::thread httpThread(httpServerThread);
+    httpThread.detach();
 
     // cv::Mat infer;
     // need to clear after every loop
@@ -128,8 +233,7 @@ int main()
         cam >> frame;
         if(frame.empty()) break;
         // cv::resize(frame, infer, cv::Size(320,240)); // 17ms was 426 before ** 
-        myResize(frame , 320, 240);
-        break;
+        // break;
         if(cnnFlag >=12){
             // auto start = std::chrono::steady_clock::now();
             prob = runCNN(frame, session , inputNames , outputNames , mem); // 15ms if imshow removed -- 4-6ms resize is given before -- 23ms if no resize done
@@ -147,7 +251,12 @@ int main()
             frame.setTo(cv::Scalar(0,0,0)); // 156 microseconds
         }
         // auto start = std::chrono::steady_clock::now();
-        myEncoder.encodeFrame(frame); // 3ms
+        // myEncoder.encodeFrame(frame); // 3ms
+
+        q240.Pushframe(frame);
+        q480.Pushframe(frame);
+        q720.Pushframe(frame);
+
         // auto end = std::chrono::steady_clock::now();
         // auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
         // std::cout << "Time taken: " << duration.count() << " milliseconds" << std::endl;
@@ -158,7 +267,14 @@ int main()
             break;
     }
     
-    myEncoder.flush();
+    q240.stopQueue();
+    q480.stopQueue();
+    q720.stopQueue();
+
+    if(t240.joinable()) t240.join();
+    if(t480.joinable()) t480.join();
+    if(t720.joinable()) t720.join();
+
 
     cam.release();
     cv::destroyAllWindows();

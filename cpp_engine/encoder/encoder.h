@@ -34,11 +34,12 @@ public:
 
     void encodeFrame(const cv::Mat& bgrFrame);
     void flush();
-    // Need to understand this is detail I don't get it **
     // Encoders buffer frames internally.
     // Especially H.264.
     // So at the end, you must flush delayed packets out.
     // Without flushing, the last few frames may never be written.
+
+    std::function<void(uint8_t*, int)> onPacket;
 
 private:
     int width_;
