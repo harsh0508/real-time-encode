@@ -154,6 +154,9 @@ void VideoEncoder::receivePackets() {
 
         check(ret, "avcodec_receive_packet failed");
 
+        if (onPacket) {
+            onPacket(packet_->data, packet_->size);
+        }
         out_.write(reinterpret_cast<const char*>(packet_->data), packet_->size);
         av_packet_unref(packet_);
     }

@@ -1,34 +1,134 @@
 #include <opencv2/opencv.hpp>
 #include <onnxruntime/core/session/onnxruntime_cxx_api.h>
 #include <iostream>
+#include <chrono>
+#include <queue>
+#include <mutex>
+#include <thread>
+#include <condition_variable>
+#include <atomic>
+#include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
+
+#include "httplib.h"
+
 #include "encoder.h"
 
-const float THRESHOLD = 0.7;
+constexpr float THRESHOLD {0.7};
 
-float runCNN(cv::Mat &img, Ort::Session &session)
+
+
+void httpServerThread(){
+    constexpr int port {8080};
+    httplib::Server server;
+
+    server.Get("/streams", [](const httplib::Request&, httplib::Response& res) {
+        res.set_content(R"({
+            "240p": "rtmp://localhost/live/stream_240",
+            "480p": "rtmp://localhost/live/stream_480",
+            "720p": "rtmp://localhost/live/stream_720"
+        })", "application/json");
+    });
+
+    server.listen("0.0.0.0", port);
+}
+
+struct FrameQueue{
+
+    std::queue<cv::Mat> q;
+    std::mutex m;
+    std::condition_variable cv;
+    std::atomic<bool> running{true};
+    size_t maxSize = 5;
+
+    void Pushframe(cv::Mat& frame){
+        std::lock_guard<std::mutex> lock(m);
+        // what does this mean ?
+
+        if(q.size() >= maxSize){
+            q.pop();
+        }
+
+        q.push(frame.clone());
+        cv.notify_one();
+
+    }
+
+    bool popFrame(cv::Mat& frame){
+        std::unique_lock<std::mutex> lock(m);
+
+        cv.wait(lock,[&]{
+            return !q.empty() || !running;
+        });
+
+        if(!running && q.empty()) return false;
+
+        frame = std::move(q.front());
+        q.pop();
+        return true;
+    }
+
+    void stopQueue(){
+        running = false;
+        cv.notify_all();
+    }
+
+};
+
+
+void EncoderWorker(
+    FrameQueue& queue,
+    const std::string& outFileName,
+    int outW,
+    int outH,
+    int fps,
+    int bitrate
+){
+    VideoEncoder encoder(outFileName, outW , outH , fps ,bitrate);
+    encoder.onPacket = [&](uint8_t* data, int size) {
+            // send via websocket / rtmp
+            // sendToRTMP(data, size);
+    };
+    cv::Mat frame;
+    cv::Mat resize;
+
+    while(queue.popFrame(frame)){
+        cv::resize(frame, resize, cv::Size(outW, outH));
+        encoder.encodeFrame(resize);
+        
+
+    }
+    encoder.flush();
+}
+
+float runCNN(cv::Mat &img, Ort::Session &session , 
+    const char** inputNames , const char** outputNames ,
+    Ort::MemoryInfo &mem)
 {
+    constexpr int cnnHeight {240};
+    constexpr int cnnWidth {320};
+    constexpr int channels {3};
+    constexpr int batch  {1};
+    constexpr int planeSize { cnnHeight * cnnWidth};
+    constexpr int tensorSize {batch * channels * planeSize};
+    constexpr std::array<int64_t, 4> shape {batch, channels, cnnHeight, cnnWidth};
+
     cv::Mat input;
-    cv::resize(img, input, cv::Size(224,224));
+    cv::resize(img, input, cv::Size(cnnWidth,cnnHeight));
     input.convertTo(input, CV_32F, 1.0/255);
 
-    std::vector<float> tensor(1*3*224*224);
+    std::array<float , tensorSize> tensor {};
+    // insted of std::vector<float> tensor {tensorSize}; -- uses stack -- cuts 2 ms
 
-    for(int c=0;c<3;c++)
-        for(int y=0;y<224;y++)
-            for(int x=0;x<224;x++)
-                tensor[c*224*224 + y*224 + x] =
+    for(int c=0;c<channels;c++)
+        for(int y=0;y<cnnHeight;y++)
+            for(int x=0;x<cnnWidth;x++)
+                tensor[c * planeSize + y * cnnWidth + x] =
                     input.at<cv::Vec3f>(y,x)[c];
-
-    std::array<int64_t,4> shape = {1,3,224,224};
-
-    Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(
-        OrtArenaAllocator, OrtMemTypeDefault);
-
+                    // check what is at. bound/type handling 
+                    // and how to make better loops 
     Ort::Value inputTensor = Ort::Value::CreateTensor<float>(
-        mem, tensor.data(), tensor.size(), shape.data(), 4);
-
-    const char* inputNames[] = {"input"};
-    const char* outputNames[] = {"output"};
+        mem, tensor.data(), tensor.size(), shape.data(), shape.size());
 
     auto output = session.Run(
         Ort::RunOptions{nullptr},
@@ -39,23 +139,43 @@ float runCNN(cv::Mat &img, Ort::Session &session)
         1);
 
     float* prob = output.front().GetTensorMutableData<float>();
+    constexpr int numAnchors = 4420;
+    float maxFaceProb = 0.0f;
 
-    return prob[0];
+    for(int i = 0; i < numAnchors; i++) {
+        float faceProb = prob[i * 2 + 1];
+        if(faceProb > maxFaceProb)
+            maxFaceProb = faceProb;
+    }
+    return maxFaceProb;
 }
+    // auto start = std::chrono::steady_clock::now();
+    // auto end = std::chrono::steady_clock::now();
+    // auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    // std::cout << "Time taken: " << duration.count() << " milliseconds" << std::endl;
 
 int main()
 {
-    // std::cout << "started" << std::flush;
+    short cnnFlag {0};
     cv::VideoCapture cam(0);
 
     if(!cam.isOpened())
         return -1;
 
-    // Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "cnn");
-    // Ort::SessionOptions opts;
-    // opts.SetIntraOpNumThreads(4);
+    Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "cnn");
+    Ort::SessionOptions opts;
+    opts.SetIntraOpNumThreads(4); // was 4 before **
 
-    // Ort::Session session(env, "mobilenet.onnx", opts);
+    Ort::Session session(env, "./onnx_model/face-det.onnx", opts);
+
+    Ort::AllocatorWithDefaultOptions allocator;
+    auto inputNameAllocated = session.GetInputNameAllocated(0, allocator);
+    auto outputNameAllocated = session.GetOutputNameAllocated(0, allocator);
+
+    const char* inputNames[] = { inputNameAllocated.get() };
+    const char* outputNames[] = { outputNameAllocated.get() };
+    Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(
+        OrtArenaAllocator, OrtMemTypeDefault);
 
     const int width {static_cast<int>(cam.get(cv::CAP_PROP_FRAME_WIDTH))} ;
     const int height {static_cast<int>(cam.get(cv::CAP_PROP_FRAME_HEIGHT))};
@@ -63,35 +183,98 @@ int main()
 
     fps = (fps <=0) ? 25: fps;
     
-    VideoEncoder myEncoder("output.h264" , width , height , fps);
+    // VideoEncoder myEncoder("output.h264" , width , height , fps);  
+
+    FrameQueue q240;
+    FrameQueue q480;
+    FrameQueue q720;
+
+    std::thread t240(
+        EncoderWorker,
+        std::ref(q240),
+        "output_240p.h264",
+        426,
+        240,
+        fps,
+        300000
+    );
+
+    std::thread t480(
+        EncoderWorker,
+        std::ref(q480),
+        "output_480p.h264",
+        854,
+        480,
+        fps,
+        800000
+    );
+
+    std::thread t720(
+        EncoderWorker,
+        std::ref(q720),
+        "output_720p.h264",
+        1280,
+        720,
+        fps,
+        2500000
+    );
+
 
     cv::Mat frame;
+    float prob {0.0f};
+    
+    std::thread httpThread(httpServerThread);
+    httpThread.detach();
 
+    // cv::Mat infer;
+    // need to clear after every loop
     while(true)
     {
         cam >> frame;
         if(frame.empty()) break;
+        // cv::resize(frame, infer, cv::Size(320,240)); // 17ms was 426 before ** 
+        // break;
+        if(cnnFlag >=12){
+            // auto start = std::chrono::steady_clock::now();
+            prob = runCNN(frame, session , inputNames , outputNames , mem); // 15ms if imshow removed -- 4-6ms resize is given before -- 23ms if no resize done
+            // auto end = std::chrono::steady_clock::now();
+            // auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            // std::cout << "Time taken: " << duration.count() << " milliseconds" << std::endl;
+            // break;
+            cnnFlag = 0;
+        }
+        else{
+            cnnFlag+=1;
+        }
+        
+        if(prob > 0.9){
+            frame.setTo(cv::Scalar(0,0,0)); // 156 microseconds
+        }
+        // auto start = std::chrono::steady_clock::now();
+        // myEncoder.encodeFrame(frame); // 3ms
 
-        // create 240p frame for inference
-        cv::Mat infer;
-        cv::resize(frame, infer, cv::Size(426,240));
+        q240.Pushframe(frame);
+        q480.Pushframe(frame);
+        q720.Pushframe(frame);
 
-        // float prob = runCNN(infer, session);
-
-        // if(prob > THRESHOLD)
-        //     frame.setTo(cv::Scalar(0,0,0));
-
-        // ENCODER SHOULD RUN HERE
-        // encodeFrame(frame);
-
-        myEncoder.encodeFrame(frame);
-
-        cv::imshow("stream", frame);
+        // auto end = std::chrono::steady_clock::now();
+        // auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        // std::cout << "Time taken: " << duration.count() << " milliseconds" << std::endl;
+        // break;
+        // cv::imshow("stream", frame); ** remove to watch without renderer
 
         if(cv::waitKey(1)==27)
             break;
     }
-    myEncoder.flush();
+    
+    q240.stopQueue();
+    q480.stopQueue();
+    q720.stopQueue();
+
+    if(t240.joinable()) t240.join();
+    if(t480.joinable()) t480.join();
+    if(t720.joinable()) t720.join();
+
 
     cam.release();
     cv::destroyAllWindows();

@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Camera Preview</title>
+    <title>Video Stream Preview</title>
+
     <style>
       * {
         box-sizing: border-box;
@@ -24,7 +25,7 @@
 
       .app {
         width: 100%;
-        max-width: 1000px;
+        max-width: 1100px;
         background: #1e293b;
         border-radius: 20px;
         padding: 24px;
@@ -47,38 +48,76 @@
       }
 
       .video-wrap {
+        position: relative;
         width: 100%;
         background: #020617;
         border-radius: 16px;
         overflow: hidden;
         border: 1px solid #334155;
+        min-height: 520px;
         display: flex;
         align-items: center;
         justify-content: center;
-        min-height: 500px;
       }
 
       video {
         width: 100%;
-        height: auto;
+        height: 100%;
+        min-height: 520px;
+        object-fit: contain;
         display: block;
         background: black;
       }
 
-      .controls {
-        margin-top: 20px;
+      .empty-state {
+        position: absolute;
+        text-align: center;
+        color: #94a3b8;
+        pointer-events: none;
+      }
+
+      .empty-state h2 {
+        font-size: 22px;
+        color: #e2e8f0;
+        margin-bottom: 8px;
+      }
+
+      .empty-state p {
+        font-size: 14px;
+      }
+
+      .overlay-controls {
+        position: absolute;
+        left: 50%;
+        bottom: 24px;
+        transform: translateX(-50%) translateY(12px);
         display: flex;
         gap: 12px;
         flex-wrap: wrap;
+        justify-content: center;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease, transform 0.2s ease;
+        background: rgba(15, 23, 42, 0.72);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        padding: 12px;
+        border-radius: 16px;
+      }
+
+      .video-wrap:hover .overlay-controls {
+        opacity: 1;
+        pointer-events: auto;
+        transform: translateX(-50%) translateY(0);
       }
 
       button {
         border: none;
         outline: none;
-        padding: 12px 20px;
+        padding: 12px 18px;
         border-radius: 12px;
-        font-size: 15px;
-        font-weight: 600;
+        font-size: 14px;
+        font-weight: 700;
         cursor: pointer;
         transition: transform 0.15s ease, opacity 0.15s ease;
       }
@@ -86,6 +125,12 @@
       button:hover {
         transform: translateY(-1px);
         opacity: 0.95;
+      }
+
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none;
       }
 
       #startBtn {
@@ -98,30 +143,65 @@
         color: white;
       }
 
-      .status {
+      #upload-stream {
+        background: #3b82f6;
+        color: white;
+      }
+
+      .status-row {
         margin-top: 16px;
-        font-size: 14px;
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
         color: #94a3b8;
+        font-size: 14px;
+      }
+
+      .badge {
+        color: #e2e8f0;
+        background: #0f172a;
+        border: 1px solid #334155;
+        border-radius: 999px;
+        padding: 6px 12px;
+      }
+
+      #fileInput {
+        display: none;
       }
     </style>
   </head>
+
   <body>
     <div class="app">
       <div class="header">
-        <div class="title">Live Camera Preview</div>
-        <div class="subtitle">Electron webcam stream running locally</div>
+        <div class="title">Live Video Stream</div>
+        <div class="subtitle">
+          Use camera or uploaded video.
+        </div>
       </div>
 
-      <div class="video-wrap">
+      <div class="video-wrap" id="videoWrap">
         <video id="video" autoplay playsinline muted></video>
+
+        <div class="empty-state" id="emptyState">
+          <h2>No stream active</h2>
+          <p>Hover here and choose Start Camera or Upload Stream.</p>
+        </div>
+
+        <div class="overlay-controls">
+          <button id="startBtn">Start Camera</button>
+          <button id="stopBtn" disabled>Stop</button>
+          <button id="upload-stream">Upload Stream</button>
+        </div>
+
+        <input id="fileInput" type="file" accept="video/*" />
       </div>
 
-      <div class="controls">
-        <button id="startBtn">Start Streaming</button>
-        <button id="stopBtn">Stop Streaming</button>
+      <div class="status-row">
+        <div id="status">Status: Waiting for input</div>
+        <div class="badge" id="streamType">Source: None</div>
       </div>
-
-      <div class="status" id="status">Status: Waiting to start camera</div>
     </div>
 
     <script type="module" src="./renderer.js"></script>
