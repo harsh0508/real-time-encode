@@ -19,6 +19,7 @@ target_include_directories(cpp_engine PRIVATE
     ${OpenCV_INCLUDE_DIRS}
     ${VCPKG_INSTALLED}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/encoder
+    ${CMAKE_CURRENT_SOURCE_DIR}/http
 )
 
 target_link_directories(cpp_engine PRIVATE

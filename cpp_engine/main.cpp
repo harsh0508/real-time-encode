@@ -9,13 +9,13 @@
 #include <atomic>
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
+#include <string_view>
 
 #include "httplib.h"
 
 #include "encoder.h"
 
-constexpr float THRESHOLD {0.7};
-
+constexpr float FIGHT_THRESHOLD {0.4f};
 
 
 void httpServerThread(){
@@ -24,9 +24,9 @@ void httpServerThread(){
 
     server.Get("/streams", [](const httplib::Request&, httplib::Response& res) {
         res.set_content(R"({
-            "240p": "rtmp://localhost/live/stream_240",
-            "480p": "rtmp://localhost/live/stream_480",
-            "720p": "rtmp://localhost/live/stream_720"
+            "240p": "' + RTMP_240_URL + '",
+            "480p": "' + RTMP_480_URL + '",
+            "720p": "' + RTMP_720_URL + '"
         })", "application/json");
     });
 
@@ -82,9 +82,10 @@ void EncoderWorker(
     int outW,
     int outH,
     int fps,
-    int bitrate
+    int bitrate,
+    OutputMode mode = OutputMode::LocalFile
 ){
-    VideoEncoder encoder(outFileName, outW , outH , fps ,bitrate);
+    VideoEncoder encoder(outFileName, outW , outH , fps ,bitrate, mode);
     encoder.onPacket = [&](uint8_t* data, int size) {
             // send via websocket / rtmp
             // sendToRTMP(data, size);
@@ -101,34 +102,66 @@ void EncoderWorker(
     encoder.flush();
 }
 
-float runCNN(cv::Mat &img, Ort::Session &session , 
-    const char** inputNames , const char** outputNames ,
-    Ort::MemoryInfo &mem)
+
+float runCNN(
+    cv::Mat& img,
+    Ort::Session& session,
+    const char** inputNames,
+    const char** outputNames,
+    Ort::MemoryInfo& mem
+)
 {
-    constexpr int cnnHeight {240};
-    constexpr int cnnWidth {320};
-    constexpr int channels {3};
-    constexpr int batch  {1};
-    constexpr int planeSize { cnnHeight * cnnWidth};
-    constexpr int tensorSize {batch * channels * planeSize};
-    constexpr std::array<int64_t, 4> shape {batch, channels, cnnHeight, cnnWidth};
+    constexpr int cnnHeight {224};
+    constexpr int cnnWidth  {224};
+    constexpr int channels  {3};
+    constexpr int batch     {1};
+
+    constexpr int tensorSize = batch * cnnHeight * cnnWidth * channels;
+
+    // Your ONNX model from TensorFlow/MobileNetV2 expects NHWC:
+    // [1, 224, 224, 3]
+    constexpr std::array<int64_t, 4> shape {
+        batch,
+        cnnHeight,
+        cnnWidth,
+        channels
+    };
 
     cv::Mat input;
-    cv::resize(img, input, cv::Size(cnnWidth,cnnHeight));
-    input.convertTo(input, CV_32F, 1.0/255);
 
-    std::array<float , tensorSize> tensor {};
-    // insted of std::vector<float> tensor {tensorSize}; -- uses stack -- cuts 2 ms
+    // OpenCV camera frame is BGR, but your Python notebook converts BGR -> RGB.
+    cv::cvtColor(img, input, cv::COLOR_BGR2RGB);
 
-    for(int c=0;c<channels;c++)
-        for(int y=0;y<cnnHeight;y++)
-            for(int x=0;x<cnnWidth;x++)
-                tensor[c * planeSize + y * cnnWidth + x] =
-                    input.at<cv::Vec3f>(y,x)[c];
-                    // check what is at. bound/type handling 
-                    // and how to make better loops 
+    // MobileNetV2 training size
+    cv::resize(input, input, cv::Size(cnnWidth, cnnHeight));
+
+    // Same as Python: img.astype(np.float32) / 255.0
+    input.convertTo(input, CV_32F, 1.0 / 255.0);
+
+    std::array<float, tensorSize> tensor {};
+
+    int idx = 0;
+
+    // NHWC layout: height -> width -> channel
+    for(int y = 0; y < cnnHeight; y++)
+    {
+        for(int x = 0; x < cnnWidth; x++)
+        {
+            cv::Vec3f pixel = input.at<cv::Vec3f>(y, x);
+
+            tensor[idx++] = pixel[0]; // R
+            tensor[idx++] = pixel[1]; // G
+            tensor[idx++] = pixel[2]; // B
+        }
+    }
+
     Ort::Value inputTensor = Ort::Value::CreateTensor<float>(
-        mem, tensor.data(), tensor.size(), shape.data(), shape.size());
+        mem,
+        tensor.data(),
+        tensor.size(),
+        shape.data(),
+        shape.size()
+    );
 
     auto output = session.Run(
         Ort::RunOptions{nullptr},
@@ -136,26 +169,45 @@ float runCNN(cv::Mat &img, Ort::Session &session ,
         &inputTensor,
         1,
         outputNames,
-        1);
+        1
+    );
 
-    float* prob = output.front().GetTensorMutableData<float>();
-    constexpr int numAnchors = 4420;
-    float maxFaceProb = 0.0f;
+    float* result = output.front().GetTensorMutableData<float>();
 
-    for(int i = 0; i < numAnchors; i++) {
-        float faceProb = prob[i * 2 + 1];
-        if(faceProb > maxFaceProb)
-            maxFaceProb = faceProb;
-    }
-    return maxFaceProb;
+    // Binary model output:
+    // probability of fight / violence
+    float fightProb = result[0];
+
+    return fightProb;
 }
     // auto start = std::chrono::steady_clock::now();
     // auto end = std::chrono::steady_clock::now();
     // auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
     // std::cout << "Time taken: " << duration.count() << " milliseconds" << std::endl;
 
-int main()
+int main(int argc, char* argv[])
 {
+    bool useRTMP = false;
+
+    if (argc > 1 && std::string(argv[1]) == "--rtmp") {
+        useRTMP = true;
+    }
+    std::string out240 = useRTMP
+        ? "rtmp://localhost/live/stream_240"
+        : "output_240p.h264";
+
+    std::string out480 = useRTMP
+        ? "rtmp://localhost/live/stream_480"
+        : "output_480p.h264";
+
+    std::string out720 = useRTMP
+        ? "rtmp://localhost/live/stream_720"
+        : "output_720p.h264";
+
+    OutputMode mode = useRTMP
+        ? OutputMode::RTMPStream
+        : OutputMode::LocalFile;
+
     short cnnFlag {0};
     cv::VideoCapture cam(0);
 
@@ -166,7 +218,7 @@ int main()
     Ort::SessionOptions opts;
     opts.SetIntraOpNumThreads(4); // was 4 before **
 
-    Ort::Session session(env, "./onnx_model/face-det.onnx", opts);
+    Ort::Session session(env, "../onnx_model/violence_detection_mobilenetv2.onnx", opts);
 
     Ort::AllocatorWithDefaultOptions allocator;
     auto inputNameAllocated = session.GetInputNameAllocated(0, allocator);
@@ -192,31 +244,37 @@ int main()
     std::thread t240(
         EncoderWorker,
         std::ref(q240),
-        "output_240p.h264",
+        // "output_240p.h264",
+        out240,
         426,
         240,
         fps,
-        300000
+        300000,
+        mode
     );
 
     std::thread t480(
         EncoderWorker,
         std::ref(q480),
-        "output_480p.h264",
+        // "output_480p.h264",
+        out480,
         854,
         480,
         fps,
-        800000
+        800000,
+        mode
     );
 
     std::thread t720(
         EncoderWorker,
         std::ref(q720),
-        "output_720p.h264",
+        // "output_720p.h264",
+        out720,
         1280,
         720,
         fps,
-        2500000
+        2500000,
+        mode
     );
 
 
