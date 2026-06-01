@@ -19,5 +19,6 @@
     "undici-types": "^7.22.0"
   },
   "dependencies": {
+    "mmap-io": "^1.1.7"
   }
 }

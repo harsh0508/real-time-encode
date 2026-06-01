@@ -1,219 +1,163 @@
-const video = document.getElementById("video");
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
-const uploadBtn = document.getElementById("upload-stream");
-const fileInput = document.getElementById("fileInput");
 const statusText = document.getElementById("status");
-const streamType = document.getElementById("streamType");
 const emptyState = document.getElementById("emptyState");
+const streamType = document.getElementById("streamType");
 
-let currentStream = null;
-let currentSource = "none";
-let frameTimer = null;
-let uploadedObjectUrl = null;
+const canvas = document.getElementById("cppCanvas");
+const ctx = canvas.getContext("2d", {
+  alpha: false,
+  desynchronized: true,
+});
 
-const canvas = document.createElement("canvas");
-const ctx = canvas.getContext("2d", { willReadFrequently: true });
-
-const FRAME_SEND_INTERVAL_MS = 33;
-// 33ms = around 30 FPS.
-// Increase to 66ms for around 15 FPS if C++ engine becomes slow.
+let running = false;
+let animationId = null;
+let lastSeq = null;
+let frameCount = 0;
+let lastFpsTime = performance.now();
 
 function setStatus(message) {
-  statusText.textContent = `Status: ${message}`;
+  if (statusText) {
+    statusText.textContent = `Status: ${message}`;
+  }
 }
 
 function setSourceLabel(source) {
-  streamType.textContent = `Source: ${source}`;
+  if (streamType) {
+    streamType.textContent = `Source: ${source}`;
+  }
 }
 
 function showPreviewState(active) {
-  emptyState.style.display = active ? "none" : "block";
-  stopBtn.disabled = !active;
-}
-
-async function notifyCppEngineStreamStarted(source) {
-  try {
-    if (window.api?.startCppStream) {
-      await window.api.startCppStream({ source });
-    } else if (window.electronAPI?.startCppStream) {
-      await window.electronAPI.startCppStream({ source });
-    }
-  } catch (error) {
-    console.error("Could not notify C++ engine start:", error);
+  if (emptyState) {
+    emptyState.style.display = active ? "none" : "block";
   }
-}
 
-async function notifyCppEngineStreamStopped() {
-  try {
-    if (window.api?.stopCppStream) {
-      await window.api.stopCppStream();
-    } else if (window.electronAPI?.stopCppStream) {
-      await window.electronAPI.stopCppStream();
-    }
-  } catch (error) {
-    console.error("Could not notify C++ engine stop:", error);
+  if (stopBtn) {
+    stopBtn.disabled = !active;
   }
-}
 
-async function sendFrameToCppEngine(payload) {
-  try {
-    if (window.api?.sendVideoFrame) {
-      await window.api.sendVideoFrame(payload);
-    } else if (window.electronAPI?.sendVideoFrame) {
-      await window.electronAPI.sendVideoFrame(payload);
-    } else {
-      // Fallback while backend bridge is not connected.
-      // Remove this once preload/main IPC is wired.
-      console.log("Frame ready for C++ engine:", {
-        width: payload.width,
-        height: payload.height,
-        source: payload.source,
-        bytes: payload.frame.byteLength,
-      });
-    }
-  } catch (error) {
-    console.error("Failed to send frame to C++ engine:", error);
-  }
-}
-
-function startFramePump() {
-  stopFramePump();
-
-  frameTimer = setInterval(() => {
-    if (!video.videoWidth || !video.videoHeight) return;
-    if (video.paused || video.ended) return;
-
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-
-    sendFrameToCppEngine({
-      width: canvas.width,
-      height: canvas.height,
-      source: currentSource,
-      timestamp: performance.now(),
-
-      // RGBA raw frame buffer.
-      // C++ side can convert RGBA -> BGR/YUV before encoding.
-      frame: imageData.data.buffer,
-    });
-  }, FRAME_SEND_INTERVAL_MS);
-}
-
-function stopFramePump() {
-  if (frameTimer) {
-    clearInterval(frameTimer);
-    frameTimer = null;
+  if (startBtn) {
+    startBtn.disabled = active;
   }
 }
 
 async function startCamera() {
   try {
-    stopCurrentStream();
+    setStatus("Starting C++ engine...");
 
-    currentStream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-        frameRate: { ideal: 30 },
-      },
-      audio: false,
-    });
+    const result = await window.api.startCppEngine();
 
-    currentSource = "camera";
+    if (!result || !result.ok) {
+      setStatus(result?.message || "Failed to start C++ engine.");
+      return;
+    }
 
-    video.srcObject = currentStream;
-    video.muted = true;
-    video.controls = false;
-
-    await video.play();
+    running = true;
+    lastSeq = null;
+    frameCount = 0;
+    lastFpsTime = performance.now();
 
     showPreviewState(true);
-    setSourceLabel("Camera");
-    setStatus("Camera started. Sending frames to C++ engine.");
+    setSourceLabel("C++ Camera Shared Memory");
+    setStatus("C++ engine started. Waiting for shared memory frame...");
 
-    await notifyCppEngineStreamStarted("camera");
-    startFramePump();
+    drawLoop();
   } catch (error) {
     console.error(error);
-    setStatus("Could not start camera. Check camera permission.");
-    showPreviewState(false);
+    setStatus(`Start error: ${error.message}`);
   }
 }
 
-function uploadStream() {
-  fileInput.click();
+async function stopCamera() {
+  try {
+    running = false;
+
+    if (animationId) {
+      cancelAnimationFrame(animationId);
+      animationId = null;
+    }
+
+    await window.api.stopCppEngine();
+
+    if (ctx && canvas) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    showPreviewState(false);
+    setSourceLabel("None");
+    setStatus("C++ engine stopped.");
+  } catch (error) {
+    console.error(error);
+    setStatus(`Stop error: ${error.message}`);
+  }
 }
 
-async function handleUploadedVideo(event) {
-  const file = event.target.files?.[0];
-  if (!file) return;
-
-  stopCurrentStream();
-
-  uploadedObjectUrl = URL.createObjectURL(file);
-  currentSource = "uploaded-video";
-
-  video.srcObject = null;
-  video.src = uploadedObjectUrl;
-  video.muted = true;
-  video.controls = false;
-  video.loop = false;
+function drawLoop() {
+  if (!running) return;
 
   try {
-    await video.play();
+    const frame = window.api.getLatestFrame();
 
-    showPreviewState(true);
-    setSourceLabel(`Uploaded Video`);
-    setStatus(`Playing "${file.name}". Sending frames to C++ engine.`);
-
-    await notifyCppEngineStreamStarted("uploaded-video");
-    startFramePump();
+    if (frame && frame.pixels) {
+      drawFrame(frame);
+      updateFps(frame);
+    }
   } catch (error) {
-    console.error(error);
-    setStatus("Could not play uploaded video.");
-    showPreviewState(false);
+    console.error("Frame read error:", error);
+  }
+
+  animationId = requestAnimationFrame(drawLoop);
+}
+
+function drawFrame(frame) {
+  const { width, height, pixels } = frame;
+
+  if (!width || !height || !pixels) return;
+
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+
+    canvas.style.width = "100%";
+    canvas.style.height = "100%";
+  }
+
+  const imageData = new ImageData(
+    pixels,
+    width,
+    height
+  );
+
+  ctx.putImageData(imageData, 0, 0);
+}
+
+function updateFps(frame) {
+  frameCount++;
+
+  const now = performance.now();
+  const elapsed = now - lastFpsTime;
+
+  if (elapsed >= 1000) {
+    const fps = Math.round((frameCount * 1000) / elapsed);
+
+    setStatus(
+      `Reading latest shared-memory frame | Display FPS: ${fps}`
+    );
+
+    frameCount = 0;
+    lastFpsTime = now;
   }
 }
 
-function stopCurrentStream() {
-  stopFramePump();
-
-  if (currentStream) {
-    currentStream.getTracks().forEach((track) => track.stop());
-    currentStream = null;
-  }
-
-  if (uploadedObjectUrl) {
-    URL.revokeObjectURL(uploadedObjectUrl);
-    uploadedObjectUrl = null;
-  }
-
-  video.pause();
-  video.srcObject = null;
-  video.removeAttribute("src");
-  video.load();
-
-  currentSource = "none";
-
-  showPreviewState(false);
-  setSourceLabel("None");
-  setStatus("Stream stopped.");
-
-  notifyCppEngineStreamStopped();
+if (startBtn) {
+  startBtn.addEventListener("click", startCamera);
 }
 
-video.addEventListener("ended", () => {
-  if (currentSource === "uploaded-video") {
-    stopCurrentStream();
-  }
-});
+if (stopBtn) {
+  stopBtn.addEventListener("click", stopCamera);
+}
 
-startBtn.addEventListener("click", startCamera);
-stopBtn.addEventListener("click", stopCurrentStream);
-uploadBtn.addEventListener("click", uploadStream);
-fileInput.addEventListener("change", handleUploadedVideo);
+showPreviewState(false);
+setSourceLabel("None");
+setStatus("Idle");

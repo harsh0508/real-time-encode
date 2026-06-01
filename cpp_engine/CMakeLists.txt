@@ -13,12 +13,14 @@ set(VCPKG_INSTALLED "${VCPKG_ROOT}/installed/${VCPKG_TRIPLET}")
 add_executable(cpp_engine
     main.cpp
     encoder/encoder.cpp
+    SM/shm_frame.cpp
 )
 
 target_include_directories(cpp_engine PRIVATE
     ${OpenCV_INCLUDE_DIRS}
     ${VCPKG_INSTALLED}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/encoder
+    ${CMAKE_CURRENT_SOURCE_DIR}/SM
     ${CMAKE_CURRENT_SOURCE_DIR}/http
 )
 

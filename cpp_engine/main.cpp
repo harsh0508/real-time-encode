@@ -15,6 +15,9 @@
 
 #include "encoder.h"
 
+#include "shm_frame.h"
+
+
 constexpr float FIGHT_THRESHOLD {0.4f};
 
 
@@ -174,8 +177,6 @@ float runCNN(
 
     float* result = output.front().GetTensorMutableData<float>();
 
-    // Binary model output:
-    // probability of fight / violence
     float fightProb = result[0];
 
     return fightProb;
@@ -187,10 +188,20 @@ float runCNN(
 
 int main(int argc, char* argv[])
 {
+    int fightCounter {0};
     bool useRTMP = false;
+    std::string modelPath = "../onnx_model/improved_fight_model.onnx";
 
-    if (argc > 1 && std::string(argv[1]) == "--rtmp") {
-        useRTMP = true;
+
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+
+        if (arg == "--rtmp") {
+            useRTMP = true;
+        }
+        else if (arg == "--model" && i + 1 < argc) {
+            modelPath = argv[++i];
+        }
     }
     std::string out240 = useRTMP
         ? "rtmp://localhost/live/stream_240"
@@ -218,7 +229,7 @@ int main(int argc, char* argv[])
     Ort::SessionOptions opts;
     opts.SetIntraOpNumThreads(4); // was 4 before **
 
-    Ort::Session session(env, "../onnx_model/violence_detection_mobilenetv2.onnx", opts);
+    Ort::Session session(env, modelPath.c_str(), opts);
 
     Ort::AllocatorWithDefaultOptions allocator;
     auto inputNameAllocated = session.GetInputNameAllocated(0, allocator);
@@ -231,6 +242,19 @@ int main(int argc, char* argv[])
 
     const int width {static_cast<int>(cam.get(cv::CAP_PROP_FRAME_WIDTH))} ;
     const int height {static_cast<int>(cam.get(cv::CAP_PROP_FRAME_HEIGHT))};
+
+    const std::string shmPath = "/tmp/realtime_encode_camera_frame.shm";
+
+    SharedFrameWriter shmWriter(
+        shmPath,
+        width,
+        height,
+        4
+    );
+
+    // std::cout << "Shared frame memory ready: " << shmPath << std::endl;
+    // std::cout << "Frame size: " << width << "x" << height << std::endl;
+
     int fps {static_cast<int>(cam.get(cv::CAP_PROP_FPS))};
 
     fps = (fps <=0) ? 25: fps;
@@ -286,40 +310,48 @@ int main(int argc, char* argv[])
 
     // cv::Mat infer;
     // need to clear after every loop
+
+    // cv::Mat testImg = cv::imread("./i.jpg");
+
+    // if (testImg.empty()) {
+    //     std::cerr << "Could not load test image" << std::endl;
+    // } else {
+    //     float testProb = runCNN(testImg, session, inputNames, outputNames, mem);
+    //     std::cout << "TEST IMAGE Fight Probability: " << testProb << std::endl;
+    // }
+    // return 0;
     while(true)
     {
         cam >> frame;
         if(frame.empty()) break;
-        // cv::resize(frame, infer, cv::Size(320,240)); // 17ms was 426 before ** 
-        // break;
+        cv::Mat bgraFrame;
+        cv::cvtColor(frame, bgraFrame, cv::COLOR_BGR2RGBA);
+
+        shmWriter.writeBGRA(bgraFrame);
+
         if(cnnFlag >=12){
-            // auto start = std::chrono::steady_clock::now();
-            prob = runCNN(frame, session , inputNames , outputNames , mem); // 15ms if imshow removed -- 4-6ms resize is given before -- 23ms if no resize done
-            // auto end = std::chrono::steady_clock::now();
-            // auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            // std::cout << "Time taken: " << duration.count() << " milliseconds" << std::endl;
-            // break;
+            prob = runCNN(frame, session , inputNames , outputNames , mem); // 15ms 
             cnnFlag = 0;
         }
         else{
             cnnFlag+=1;
         }
+
+        std::cout << "Fight Probability: " << prob << ", fight counter: " << fightCounter << '\n';
         
-        if(prob > 0.9){
-            frame.setTo(cv::Scalar(0,0,0)); // 156 microseconds
+        if(prob > FIGHT_THRESHOLD){
+            fightCounter++; 
+            if(fightCounter >= 5){
+                frame.setTo(cv::Scalar(0,0,0)); // 156 microseconds
+            }
+        }else{
+            fightCounter --;
+            if(fightCounter < 0) fightCounter = 0;
         }
-        // auto start = std::chrono::steady_clock::now();
-        // myEncoder.encodeFrame(frame); // 3ms
 
         q240.Pushframe(frame);
         q480.Pushframe(frame);
         q720.Pushframe(frame);
-
-        // auto end = std::chrono::steady_clock::now();
-        // auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-        // std::cout << "Time taken: " << duration.count() << " milliseconds" << std::endl;
-        // break;
-        // cv::imshow("stream", frame); ** remove to watch without renderer
 
         if(cv::waitKey(1)==27)
             break;

@@ -107,11 +107,15 @@ void VideoEncoder::initCodec() {
     codecCtx_->gop_size = 12;
     codecCtx_->max_b_frames = 0; // <change and reason> lower latency for live RTMP streaming
     codecCtx_->pix_fmt = AV_PIX_FMT_YUV420P;
+    codecCtx_->color_range = AVCOL_RANGE_MPEG; // <change and reason> explicitly set standard limited video range to remove warning
+
 
     // <change and reason>
     // Important for container-based output such as FLV/RTMP.
     // Raw .h264 writing did not need this, but RTMP muxing benefits from it.
-    codecCtx_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    if (mode_ == OutputMode::RTMPStream) {
+        codecCtx_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER; // <change and reason> needed for FLV/RTMP container output
+    }
 
     // <change and reason>
     // x264 low-latency settings for live streaming.
